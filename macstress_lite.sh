@@ -2,7 +2,7 @@
 # MacStress Lite — Pure Bash, Zero Dependencies
 # Works on any Mac from 2010+ (bash 3.2 compatible)
 VERSION="1.4.7"
-GITHUB_REPO="vzekalo/MacStressMonitor"
+GITHUB_REPO="vdzerkalo/MacStressMonitor"
 
 R=$'\033[0;31m'
 G=$'\033[0;32m'
