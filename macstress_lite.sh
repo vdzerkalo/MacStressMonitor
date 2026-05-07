@@ -1,7 +1,7 @@
 #!/bin/bash
 # MacStress Lite — Pure Bash, Zero Dependencies
 # Works on any Mac from 2010+ (bash 3.2 compatible)
-VERSION="1.4.5"
+VERSION="1.4.7"
 GITHUB_REPO="vzekalo/MacStressMonitor"
 
 R=$'\033[0;31m'
@@ -60,12 +60,28 @@ if [ "$GOT_SUDO" -eq 0 ]; then
     (while :; do
         sleep 4
         [ ! -f /tmp/macstress_pm_raw ] && continue
-        # Parse temperatures (various formats)
-        ct=$(grep -i "die temperature\|thermal level" /tmp/macstress_pm_raw 2>/dev/null | grep -i cpu | tail -1 | grep -oE '[0-9]+\.[0-9]+' | head -1)
-        gt=$(grep -i "die temperature\|thermal level" /tmp/macstress_pm_raw 2>/dev/null | grep -i gpu | tail -1 | grep -oE '[0-9]+\.[0-9]+' | head -1)
+        # Parse temperatures (Intel + Apple Silicon formats)
+        # Intel SMC: "CPU die temperature: 45.50 C"
+        # Apple Silicon: "CPU die temperature: 35.0 C" or "thermal level X" or "average die ..."
+        # Try CPU temp via multiple patterns
+        ct=$(grep -iE "cpu.*die temperature|cpu_die_temperature" /tmp/macstress_pm_raw 2>/dev/null | tail -1 | grep -oE '[0-9]+\.[0-9]+' | head -1)
+        if [ -z "$ct" ]; then
+            ct=$(grep -iE "die temperature" /tmp/macstress_pm_raw 2>/dev/null | grep -i "cpu\|core" | tail -1 | grep -oE '[0-9]+\.[0-9]+' | head -1)
+        fi
+        if [ -z "$ct" ]; then
+            # Intel SMC fallback — TC0P, TC0H keys via raw smc lines
+            ct=$(grep -iE "TC0P|TC0H|CPU Proximity" /tmp/macstress_pm_raw 2>/dev/null | tail -1 | grep -oE '[0-9]+\.[0-9]+' | head -1)
+        fi
+        gt=$(grep -iE "gpu.*die temperature|gpu_die_temperature" /tmp/macstress_pm_raw 2>/dev/null | tail -1 | grep -oE '[0-9]+\.[0-9]+' | head -1)
+        if [ -z "$gt" ]; then
+            gt=$(grep -iE "die temperature" /tmp/macstress_pm_raw 2>/dev/null | grep -i gpu | tail -1 | grep -oE '[0-9]+\.[0-9]+' | head -1)
+        fi
+        # Fan speed (Intel) — bonus
+        fan=$(grep -iE "fan|F0Ac" /tmp/macstress_pm_raw 2>/dev/null | tail -1 | grep -oE '[0-9]+' | head -1)
         # Parse power
         cpw=$(grep -iE "^cpu power|^package power|intel energy" /tmp/macstress_pm_raw 2>/dev/null | tail -1 | grep -oE '[0-9]+\.[0-9]+' | head -1)
         gpw=$(grep -iE "^gpu power" /tmp/macstress_pm_raw 2>/dev/null | tail -1 | grep -oE '[0-9]+\.[0-9]+' | head -1)
+        [ -n "$fan" ] && echo "fan=$fan" >> "$PM_DATA"
         [ -n "$ct" ] && echo "cpu_temp=$ct" >> "$PM_DATA"
         [ -n "$gt" ] && echo "gpu_temp=$gt" >> "$PM_DATA"
         [ -n "$cpw" ] && echo "cpu_power=$cpw" >> "$PM_DATA"
@@ -358,9 +374,66 @@ LAUNCHER
 </dict>
 </plist>
 PLIST
+    # Force Launchpad refresh so the new app appears immediately
+    rm -rf "$HOME/Library/Application Support/Dock/desktoppicture.db" 2>/dev/null
+    killall Dock 2>/dev/null
     printf "\n  ${G}✅ MacStress Lite.app створено в ~/Applications/${N}\n"
     printf "  ${C}📂 %s${N}\n" "$app_path"
-    sleep 2
+    printf "  ${C}🚀 Launchpad оновлено — шукай 'MacStress Lite'${N}\n"
+    sleep 3
+}
+
+# ===== INFO (help screen) ================================
+show_info() {
+    clear
+    cat <<INFO
+
+  ${B}${C}MacStress Lite v${VERSION}${N}
+  ${D}─────────────────────────────────────────────────────${N}
+
+  ${W}Що це?${N}
+  Real-time моніторинг + стрес-тест Mac в Terminal. Pure
+  bash, ZERO залежностей, працює на будь-якому Mac 2010+.
+  Інтел та Apple Silicon. Без Python, без Homebrew.
+
+  ${W}Що відстежує (live):${N}
+    ${C}CPU${N}     — % завантаження (через top)
+    ${C}RAM${N}     — % зайнятої пам'яті + GB
+    ${C}Swap${N}    — використання swap файлу (MB)
+    ${C}Load${N}    — load average (1 хв)
+    ${C}Disk${N}    — швидкість R/W (MB/s, через iostat)
+    ${C}Batt${N}    — % акумулятора
+    ${C}Temp${N}    — CPU/GPU температура (потрібен sudo)
+    ${C}Fan${N}     — обороти вентилятора (Intel Mac)
+    ${C}Power${N}   — енергоспоживання CPU/GPU (Watts)
+
+  ${W}Кнопки керування:${N}
+    ${Y}[1]${N} CPU stress    — навантажити всі ядра на 100% (2 хв)
+    ${Y}[2]${N} RAM stress    — заповнити 512MB пам'яті (2 хв)
+    ${Y}[3]${N} Disk stress   — інтенсивний запис на диск (2 хв)
+    ${Y}[4]${N} ALL stress    — CPU+RAM+Disk одночасно (3 хв)
+    ${Y}[5]${N} Disk bench    — 4 тести швидкості диску (read/write)
+    ${Y}[x]${N} Stop          — зупинити поточний стрес-тест
+    ${Y}[u]${N} Update        — перевірити нову версію (потрібен інтернет)
+    ${Y}[a]${N} Apps install  — встановити в ~/Applications + Launchpad
+    ${Y}[i]${N} Info          — цей екран
+    ${Y}[q]${N} Quit          — вихід
+
+  ${W}Корисні поради:${N}
+  • Якщо temp/power показує "(need sudo)" — введи пароль на старті
+  • Stop тест: ${Y}x${N} або просто закрий вікно (Ctrl+C)
+  • CPU stress використовує всі ${C}${CORES}${N} ядра. Mac гріється.
+  • Disk benchmark пише ~1GB на /tmp — перевір вільне місце
+  • Запусти кілька разів стрес-тест для калібрування термопасти
+
+  ${W}Посилання:${N}
+  ${C}https://github.com/${GITHUB_REPO}${N}
+  Issues / feature requests / latest version — туди.
+
+  ${D}─────────────────────────────────────────────────────${N}
+  Натисни будь-яку клавішу для повернення...
+INFO
+    read -n 1 dummy < /dev/tty 2>/dev/null
 }
 
 # Background disk I/O cache (avoid blocking main loop with iostat)
@@ -395,7 +468,7 @@ draw_header() {
     printf "  ${C}Cores${N}  %s   ${C}RAM${N}  %s GB   ${C}macOS${N}  %s (%s)\n" "$CORES" "$RAM_GB" "$OS_VER" "$ARCH"
     printf "  ${D}================================================${N}\n"
     printf "  ${B}Controls:${N}\n"
-    printf "  ${Y}[1]${N} CPU  ${Y}[2]${N} RAM  ${Y}[3]${N} Disk  ${Y}[4]${N} ALL\n"
+    printf "  ${Y}[1]${N} CPU  ${Y}[2]${N} RAM  ${Y}[3]${N} Disk  ${Y}[4]${N} ALL  ${Y}[i]${N} Info  ${Y}[a]${N} Install\n"
     printf "  ${Y}[5]${N} Bench ${Y}[u]${N} Update ${Y}[i]${N} Install ${Y}[x]${N} Stop ${Y}[q]${N} Quit\n"
     printf "  ${D}================================================${N}\n"
     printf "\n\n\n\n\n\n\n\n\n\n"
@@ -408,8 +481,21 @@ tput civis 2>/dev/null
 
 # ===== MAIN LOOP =========================================
 while true; do
-    cr=$(ps -A -o %cpu | awk '{s+=$1} END {printf "%.1f", s}')
-    cp=$(echo "scale=1; $cr / $CORES" | bc 2>/dev/null || echo "0")
+    # CPU%: prefer `top -l 1` (idle column reliable on both Intel + Apple Silicon)
+    # Fallback: ps-based sum / cores (less precise but works without top)
+    cp=""
+    top_out=$(top -l 1 -n 0 2>/dev/null | grep -E "^CPU usage")
+    if [ -n "$top_out" ]; then
+        # Format: "CPU usage: 5.68% user, 5.68% sys, 88.63% idle"
+        idle=$(echo "$top_out" | awk -F'[%, ]+' '{for(i=1;i<=NF;i++) if($i=="idle") print $(i-1)}')
+        if [ -n "$idle" ]; then
+            cp=$(echo "scale=1; 100 - $idle" | bc 2>/dev/null)
+        fi
+    fi
+    if [ -z "$cp" ]; then
+        cr=$(ps -A -o %cpu | awk '{s+=$1} END {printf "%.1f", s}')
+        cp=$(echo "scale=1; $cr / $CORES" | bc 2>/dev/null || echo "0")
+    fi
     ci=${cp%.*}; ci=${ci:-0}
     [ "$ci" -gt 100 ] 2>/dev/null && cp="100.0" && ci=100
 
@@ -424,6 +510,7 @@ while true; do
 
     ct=$(get_pm cpu_temp); gt=$(get_pm gpu_temp)
     pw=$(get_pm cpu_power); gw=$(get_pm gpu_power)
+    fr=$(get_pm fan)
 
     cc=$G; [ "$ci" -gt 50 ] 2>/dev/null && cc=$Y; [ "$ci" -gt 80 ] 2>/dev/null && cc=$R
     mc=$G; [ "$mi" -gt 60 ] 2>/dev/null && mc=$Y; [ "$mi" -gt 85 ] 2>/dev/null && mc=$R
@@ -434,6 +521,7 @@ while true; do
     tp=""
     [ -n "$ct" ] && tp="${tp}CPU:${ct}C "
     [ -n "$gt" ] && tp="${tp}GPU:${gt}C "
+    [ -n "$fr" ] && tp="${tp}Fan:${fr}rpm "
     [ -n "$pw" ] && tp="${tp}Pwr:${pw}W "
     [ -n "$gw" ] && tp="${tp}GPU:${gw}W "
     if [ -z "$tp" ]; then
@@ -482,7 +570,9 @@ while true; do
         5) tput cnorm 2>/dev/null; disk_bench; tput civis 2>/dev/null ;;
         x|X) stop_s ;;
         u|U) tput cnorm 2>/dev/null; check_updates; clear; draw_header; tput civis 2>/dev/null ;;
-        i|I) tput cnorm 2>/dev/null; install_app; clear; draw_header; tput civis 2>/dev/null ;;
+        i|I) tput cnorm 2>/dev/null; show_info; clear; draw_header; tput civis 2>/dev/null ;;
+        a|A) tput cnorm 2>/dev/null; install_app; clear; draw_header; tput civis 2>/dev/null ;;
+        \?) tput cnorm 2>/dev/null; show_info; clear; draw_header; tput civis 2>/dev/null ;;
         q|Q) exit 0 ;;
     esac
 done
